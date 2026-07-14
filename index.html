@@ -1,0 +1,220 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Offline MD to DOCX Converter</title>
+  
+  <link rel="manifest" href="data:application/json;base64,eyJuYW1lIjoiT2ZmbGluZSBQYW5kb2MgQ29udmVydGVyIiwic2hvcnRfbmFtZSI6Ik1EMkRPQ1giLCJzdGFydF91cmwiOiIuIiwiZGlzcGxheSI6InN0YW5kYWxvbmUiLCJiYWNrZ3JvdW5kX2NvbG9yIjoiI2YwZjJmNSIsInRoZW1lX2NvbG9yIjoiIzAwN2JmZiIsImljb25zIjpbeyJzcmMiOiJodHRwczovL3VwbG9hZC53aWtpbWVkaWEub3JnL3dpa2lwZWRpYS9jb21tb25zLzQvNDgvTWFya2Rvd24tbWFyay5zdmciLCJzaXplcyI6IjE5MngxOTIiLCJ0eXBlIjoiaW1hZ2Uvc3ZnK3htbCIsInB1cnBvc2UiOiJhbnkgbWFza2FibGUifV19">
+  
+  <style>
+    body { font-family: system-ui, -apple-system, sans-serif; margin: 0; padding: 20px; background: #f0f2f5; display: flex; justify-content: center; }
+    .container { width: 100%; max-width: 800px; background: white; padding: 25px; border-radius: 12px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); }
+    h2 { margin-top: 0; }
+    textarea { width: 100%; height: 350px; padding: 12px; margin-top: 10px; border-radius: 8px; border: 1px solid #ccc; font-family: monospace; font-size: 15px; box-sizing: border-box; resize: vertical; }
+    .controls { display: flex; gap: 10px; margin-top: 15px; flex-wrap: wrap; }
+    button { padding: 12px 20px; border: none; border-radius: 8px; background: #007bff; color: white; font-weight: bold; cursor: pointer; transition: background 0.2s; }
+    button:disabled { background: #999; cursor: not-allowed; }
+    button:active { transform: scale(0.98); }
+    #folderBtn { background: #28a745; }
+    .status { margin-top: 15px; font-size: 0.9em; font-weight: bold; color: #555; }
+    
+    /* Mobile Debugger Styles */
+    .mobile-warn { font-size: 0.85em; color: #856404; background: #fff3cd; padding: 8px; border-radius: 5px; margin-top: 10px; border: 1px solid #ffeeba; }
+    #debugConsole { margin-top: 15px; padding: 10px; background: #222; color: #ff5555; font-family: monospace; font-size: 0.8em; border-radius: 5px; display: none; white-space: pre-wrap; word-wrap: break-word; }
+  </style>
+</head>
+<body>
+
+  <div class="container">
+    <h2>MD to DOCX Converter</h2>
+    
+    <textarea id="editor" placeholder="# Write or paste your Markdown here..."></textarea>
+    
+    <div class="controls">
+      <button id="folderBtn">1. Select Folder (Desktop Only)</button>
+      <button id="convertBtn" disabled>2. Convert to DOCX</button>
+    </div>
+    
+    <div class="status" id="statusMsg">Checking environment & loading engine...</div>
+    
+    <!-- Info Panels -->
+    <div class="mobile-warn" id="mobileWarn" style="display: none;">
+      <strong>Notice:</strong> Mobile browser detected. Direct folder saving is restricted; standard downloads will be used.
+    </div>
+    <div class="mobile-warn" id="secureWarn" style="display: none; color: #721c24; background: #f8d7da; border-color: #f5c6cb;">
+      <strong>Security Warning:</strong> You are on an insecure connection (HTTP via IP). Mobile browsers often block WebAssembly on insecure connections. If the engine fails to load, this is why.
+    </div>
+
+    <!-- On-Screen Debug Console for Mobile -->
+    <div id="debugConsole"><strong>Mobile Debug Log:</strong><br></div>
+  </div>
+
+  <script type="module">
+    const editor = document.getElementById('editor');
+    const folderBtn = document.getElementById('folderBtn');
+    const convertBtn = document.getElementById('convertBtn');
+    const statusMsg = document.getElementById('statusMsg');
+    const mobileWarn = document.getElementById('mobileWarn');
+    const secureWarn = document.getElementById('secureWarn');
+    const debugConsole = document.getElementById('debugConsole');
+
+    let dirHandle = null;
+    let pandocConvert = null; 
+
+    // --- Mobile On-Screen Debugger ---
+    function logErrorToScreen(msg, err) {
+      debugConsole.style.display = 'block';
+      debugConsole.innerHTML += `\n[ERROR] ${msg} ${err ? err.toString() : ''}`;
+      console.error(msg, err);
+    }
+
+    // Catch unhandled browser errors (crucial for mobile debugging)
+    window.onerror = function(message, source, lineno, colno, error) {
+      logErrorToScreen(`Browser Error: ${message} at line ${lineno}`);
+    };
+    window.addEventListener('unhandledrejection', function(event) {
+      logErrorToScreen('Promise Rejection:', event.reason);
+    });
+
+    // --- IndexedDB Logic ---
+    const dbName = 'PandocPWA';
+    const storeName = 'handles';
+
+    function initDB() {
+      return new Promise((resolve, reject) => {
+        const req = indexedDB.open(dbName, 1);
+        req.onupgradeneeded = (e) => e.target.result.createObjectStore(storeName);
+        req.onsuccess = (e) => resolve(e.target.result);
+        req.onerror = () => reject('DB Error');
+      });
+    }
+
+    async function saveHandle(handle) {
+      const db = await initDB();
+      const tx = db.transaction(storeName, 'readwrite');
+      tx.objectStore(storeName).put(handle, 'dirHandle');
+    }
+
+    async function getHandle() {
+      const db = await initDB();
+      return new Promise((resolve) => {
+        const tx = db.transaction(storeName, 'readonly');
+        const req = tx.objectStore(storeName).get('dirHandle');
+        req.onsuccess = () => resolve(req.result);
+        req.onerror = () => resolve(null);
+      });
+    }
+
+    async function verifyPermission(fileHandle) {
+      const opts = { mode: 'readwrite' };
+      if ((await fileHandle.queryPermission(opts)) === 'granted') return true;
+      if ((await fileHandle.requestPermission(opts)) === 'granted') return true;
+      return false;
+    }
+
+    // --- Initialization & Safe Loading ---
+    async function init() {
+      // 1. Check for Secure Context (HTTPS or localhost)
+      if (!window.isSecureContext) {
+        secureWarn.style.display = 'block';
+      }
+
+      // 2. Check for File System Access API
+      if (!window.showDirectoryPicker) {
+        folderBtn.style.display = 'none';
+        mobileWarn.style.display = 'block';
+      } else {
+        try {
+          dirHandle = await getHandle();
+          if (dirHandle) folderBtn.textContent = 'Folder Saved. Click to Change.';
+        } catch(e) {
+          logErrorToScreen("IndexedDB Error:", e);
+        }
+      }
+
+      // 3. Load Pandoc WASM
+      try {
+        statusMsg.textContent = 'Fetching Pandoc WASM from CDN...';
+        
+        // Added ?bundle to ensure esm.sh packs all WASM/JS together correctly for mobile
+        const module = await import('https://esm.sh/pandoc-wasm@latest?bundle');
+        pandocConvert = module.convert;
+        
+        statusMsg.textContent = 'Ready! You can now convert documents.';
+        statusMsg.style.color = 'green';
+        convertBtn.disabled = false;
+      } catch (err) {
+        statusMsg.textContent = 'Failed to load engine. Check the red log below.';
+        statusMsg.style.color = 'red';
+        logErrorToScreen("Failed to import pandoc-wasm module. This is usually caused by the browser blocking external WASM scripts on a non-HTTPS IP address.", err);
+      }
+    }
+
+    // --- Event Listeners ---
+    folderBtn.addEventListener('click', async () => {
+      try {
+        dirHandle = await window.showDirectoryPicker({ mode: 'readwrite' });
+        await saveHandle(dirHandle);
+        folderBtn.textContent = 'Folder Saved. Click to Change.';
+        statusMsg.textContent = 'Output folder set successfully.';
+        statusMsg.style.color = 'green';
+      } catch (err) {
+        console.log('Folder selection cancelled.');
+      }
+    });
+
+    convertBtn.addEventListener('click', async () => {
+      if (!pandocConvert) return;
+      
+      convertBtn.disabled = true;
+      statusMsg.textContent = 'Converting via Pandoc WASM...';
+      statusMsg.style.color = '#555';
+      debugConsole.style.display = 'none'; // hide previous errors
+      
+      try {
+        const mdText = editor.value || "# Empty Document";
+        
+        const result = await pandocConvert({ from: 'markdown', to: 'docx' }, mdText, {});
+        
+        const blob = new Blob([result.out], { 
+          type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' 
+        });
+
+        const fileName = `Document_${new Date().getTime()}.docx`;
+
+        if (window.showDirectoryPicker && dirHandle) {
+          const hasPerm = await verifyPermission(dirHandle);
+          if (hasPerm) {
+            const fileHandle = await dirHandle.getFileHandle(fileName, { create: true });
+            const writable = await fileHandle.createWritable();
+            await writable.write(blob);
+            await writable.close();
+            statusMsg.textContent = `Saved ${fileName} directly to your folder!`;
+            statusMsg.style.color = 'green';
+          } else {
+            throw new Error("Permission to save in folder denied.");
+          }
+        } else {
+          // Mobile Fallback
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement('a');
+          a.href = url;
+          a.download = fileName;
+          a.click();
+          URL.revokeObjectURL(url);
+          statusMsg.textContent = 'File downloaded successfully!';
+          statusMsg.style.color = 'green';
+        }
+      } catch(err) {
+        statusMsg.textContent = 'Conversion Error. Check log.';
+        statusMsg.style.color = 'red';
+        logErrorToScreen("Pandoc Conversion Failed:", err);
+      }
+      convertBtn.disabled = false;
+    });
+
+    init();
+  </script>
+</body>
+</html>
