@@ -23,6 +23,16 @@
     .mobile-warn { font-size: 0.85em; color: #856404; background: #fff3cd; padding: 8px; border-radius: 5px; margin-top: 10px; border: 1px solid #ffeeba; }
     #debugConsole { margin-top: 15px; padding: 10px; background: #222; color: #ff5555; font-family: monospace; font-size: 0.8em; border-radius: 5px; display: none; white-space: pre-wrap; word-wrap: break-word; }
   </style>
+
+  <!-- 1. ADD THE IMPORT MAP -->
+  <script type="importmap">
+    {
+      "imports": {
+        "pandoc-wasm": "https://cdn.jsdelivr.net/npm/pandoc-wasm@latest/src/index.browser.js",
+        "@bjorn3/browser_wasi_shim": "https://cdn.jsdelivr.net/npm/@bjorn3/browser_wasi_shim@0.3.0/dist/index.js"
+      }
+    }
+  </script>
 </head>
 <body>
 
@@ -38,7 +48,6 @@
     
     <div class="status" id="statusMsg">Checking environment & loading engine...</div>
     
-    <!-- Info Panels -->
     <div class="mobile-warn" id="mobileWarn" style="display: none;">
       <strong>Notice:</strong> Mobile browser detected. Direct folder saving is restricted; standard downloads will be used.
     </div>
@@ -51,6 +60,9 @@
   </div>
 
   <script type="module">
+    // 2. IMPORT USING THE MAPPED NAME
+    import { convert } from 'pandoc-wasm';
+
     const editor = document.getElementById('editor');
     const folderBtn = document.getElementById('folderBtn');
     const convertBtn = document.getElementById('convertBtn');
@@ -60,7 +72,6 @@
     const debugConsole = document.getElementById('debugConsole');
 
     let dirHandle = null;
-    let pandocConvert = null; 
 
     // --- Mobile On-Screen Debugger ---
     function logErrorToScreen(msg, err) {
@@ -112,7 +123,7 @@
       return false;
     }
 
-    // --- Initialization & Safe Loading ---
+    // --- Initialization ---
     async function init() {
       if (!window.isSecureContext) {
         secureWarn.style.display = 'block';
@@ -130,22 +141,10 @@
         }
       }
 
-      // 3. Load Pandoc WASM using jsDelivr instead of esm.sh
-      try {
-        statusMsg.textContent = 'Fetching Pandoc WASM from jsDelivr...';
-        
-        // This targets the browser-specific module and preserves relative paths for the .wasm file
-        const module = await import('https://cdn.jsdelivr.net/npm/pandoc-wasm@latest/src/index.browser.js');
-        pandocConvert = module.convert;
-        
-        statusMsg.textContent = 'Ready! You can now convert documents.';
-        statusMsg.style.color = 'green';
-        convertBtn.disabled = false;
-      } catch (err) {
-        statusMsg.textContent = 'Failed to load engine. Check the red log below.';
-        statusMsg.style.color = 'red';
-        logErrorToScreen("Failed to import pandoc-wasm module.", err);
-      }
+      // Because we used an import map at the top, the module is already safely loaded
+      statusMsg.textContent = 'Ready! You can now convert documents.';
+      statusMsg.style.color = 'green';
+      convertBtn.disabled = false;
     }
 
     // --- Event Listeners ---
@@ -162,8 +161,6 @@
     });
 
     convertBtn.addEventListener('click', async () => {
-      if (!pandocConvert) return;
-      
       convertBtn.disabled = true;
       statusMsg.textContent = 'Converting via Pandoc WASM...';
       statusMsg.style.color = '#555';
@@ -172,7 +169,7 @@
       try {
         const mdText = editor.value || "# Empty Document";
         
-        const result = await pandocConvert({ from: 'markdown', to: 'docx' }, mdText, {});
+        const result = await convert({ from: 'markdown', to: 'docx' }, mdText, {});
         
         const blob = new Blob([result.out], { 
           type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' 
