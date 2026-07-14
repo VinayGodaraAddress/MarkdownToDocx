@@ -17,10 +17,14 @@
     button:disabled { background: #999; cursor: not-allowed; }
     button:active { transform: scale(0.98); }
     #folderBtn { background: #28a745; }
+    
+    /* Status & Progress Bar Styles */
     .status { margin-top: 15px; font-size: 0.9em; font-weight: bold; color: #555; }
+    #progressWrapper { display: none; background: #e9ecef; border-radius: 8px; margin-top: 10px; overflow: hidden; height: 12px; width: 100%; }
+    #progressBar { width: 0%; height: 100%; background: #28a745; transition: width 0.1s; }
     
     .mobile-warn { font-size: 0.85em; color: #856404; background: #fff3cd; padding: 8px; border-radius: 5px; margin-top: 10px; border: 1px solid #ffeeba; }
-    #debugConsole { margin-top: 15px; padding: 10px; background: #222; color: #ff5555; font-family: monospace; font-size: 0.8em; border-radius: 5px; display: none; white-space: pre-wrap; word-wrap: break-word; }
+    #debugConsole { margin-top: 15px; padding: 10px; background: #222; color: #ff5555; font-family: monospace; font-size: 0.8em; border-radius: 5px; display: none; white-space: pre-wrap; word-wrap: break-word; max-height: 200px; overflow-y: auto; }
   </style>
 </head>
 <body>
@@ -35,7 +39,11 @@
       <button id="convertBtn" disabled>2. Convert to DOCX</button>
     </div>
     
-    <div class="status" id="statusMsg">Checking environment & loading engine...</div>
+    <!-- Progress Indicator -->
+    <div id="progressWrapper">
+      <div id="progressBar"></div>
+    </div>
+    <div class="status" id="statusMsg">Checking environment & starting download...</div>
     
     <div class="mobile-warn" id="mobileWarn" style="display: none;">
       <strong>Notice:</strong> Mobile browser detected. Direct folder saving is restricted; standard downloads will be used.
@@ -46,7 +54,6 @@
   </div>
 
   <script type="module">
-    // 1. Directly import the WASI Shim and the Core Engine logic from JSDelivr's ESM bundler
     import { WASI } from "https://cdn.jsdelivr.net/npm/@bjorn3/browser_wasi_shim@0.3.0/+esm";
     import { init } from "https://cdn.jsdelivr.net/npm/pandoc-wasm@latest/src/index.core.js/+esm";
 
@@ -54,6 +61,8 @@
     const folderBtn = document.getElementById('folderBtn');
     const convertBtn = document.getElementById('convertBtn');
     const statusMsg = document.getElementById('statusMsg');
+    const progressWrapper = document.getElementById('progressWrapper');
+    const progressBar = document.getElementById('progressBar');
     const mobileWarn = document.getElementById('mobileWarn');
     const debugConsole = document.getElementById('debugConsole');
 
@@ -110,7 +119,7 @@
       return false;
     }
 
-    // --- Initialization & Safe Loading ---
+    // --- Core Download & Initialization Logic ---
     async function initApp() {
       if (!window.showDirectoryPicker) {
         folderBtn.style.display = 'none';
@@ -125,23 +134,65 @@
       }
 
       try {
-        statusMsg.textContent = 'Initializing Pandoc WebAssembly Engine...';
+        progressWrapper.style.display = 'block';
+        statusMsg.textContent = 'Connecting to unpkg CDN...';
+
+        // Fetch the file manually to track download progress
+        const response = await fetch("https://unpkg.com/pandoc-wasm@latest/src/pandoc.wasm");
+        if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
+
+        const contentLength = response.headers.get('content-length');
+        const total = contentLength ? parseInt(contentLength, 10) : 0;
+        let loaded = 0;
+
+        const reader = response.body.getReader();
+        const chunks = [];
+
+        // Read the stream chunk by chunk
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          
+          chunks.push(value);
+          loaded += value.length;
+
+          // Update UI Progress
+          const loadedMB = (loaded / 1024 / 1024).toFixed(1);
+          if (total) {
+            const totalMB = (total / 1024 / 1024).toFixed(1);
+            const percent = Math.round((loaded / total) * 100);
+            progressBar.style.width = percent + '%';
+            statusMsg.textContent = `Downloading Pandoc Binary: ${percent}% (${loadedMB}MB / ${totalMB}MB)`;
+          } else {
+            statusMsg.textContent = `Downloading Pandoc Binary: ${loadedMB}MB downloaded...`;
+          }
+        }
+
+        // Package the downloaded chunks into a local Blob URL
+        statusMsg.textContent = 'Compiling WebAssembly Engine... (Please wait)';
+        progressBar.style.background = '#ffc107'; // Change color to indicate processing
         
-        // 2. Initialize the engine pulling the WASM binary from unpkg to bypass size limits
+        const blob = new Blob(chunks, { type: 'application/wasm' });
+        const localWasmUrl = URL.createObjectURL(blob);
+
+        // Initialize Pandoc with our fully downloaded local Blob URL
         const engine = init({ 
           WASI, 
-          wasmUrl: "https://unpkg.com/pandoc-wasm@latest/src/pandoc.wasm" 
+          wasmUrl: localWasmUrl 
         });
         
         pandocConvert = engine.convert;
         
+        progressWrapper.style.display = 'none';
         statusMsg.textContent = 'Ready! You can now convert documents.';
         statusMsg.style.color = 'green';
         convertBtn.disabled = false;
+        
       } catch (err) {
+        progressWrapper.style.display = 'none';
         statusMsg.textContent = 'Failed to load engine. Check the red log below.';
         statusMsg.style.color = 'red';
-        logErrorToScreen("Failed to initialize engine.", err);
+        logErrorToScreen("Failed to download or initialize engine.", err);
       }
     }
 
