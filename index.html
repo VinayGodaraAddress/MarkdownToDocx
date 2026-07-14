@@ -69,7 +69,6 @@
       console.error(msg, err);
     }
 
-    // Catch unhandled browser errors (crucial for mobile debugging)
     window.onerror = function(message, source, lineno, colno, error) {
       logErrorToScreen(`Browser Error: ${message} at line ${lineno}`);
     };
@@ -115,12 +114,10 @@
 
     // --- Initialization & Safe Loading ---
     async function init() {
-      // 1. Check for Secure Context (HTTPS or localhost)
       if (!window.isSecureContext) {
         secureWarn.style.display = 'block';
       }
 
-      // 2. Check for File System Access API
       if (!window.showDirectoryPicker) {
         folderBtn.style.display = 'none';
         mobileWarn.style.display = 'block';
@@ -133,12 +130,12 @@
         }
       }
 
-      // 3. Load Pandoc WASM
+      // 3. Load Pandoc WASM using jsDelivr instead of esm.sh
       try {
-        statusMsg.textContent = 'Fetching Pandoc WASM from CDN...';
+        statusMsg.textContent = 'Fetching Pandoc WASM from jsDelivr...';
         
-        // Added ?bundle to ensure esm.sh packs all WASM/JS together correctly for mobile
-        const module = await import('https://esm.sh/pandoc-wasm@latest?bundle');
+        // This targets the browser-specific module and preserves relative paths for the .wasm file
+        const module = await import('https://cdn.jsdelivr.net/npm/pandoc-wasm@latest/src/index.browser.js');
         pandocConvert = module.convert;
         
         statusMsg.textContent = 'Ready! You can now convert documents.';
@@ -147,7 +144,7 @@
       } catch (err) {
         statusMsg.textContent = 'Failed to load engine. Check the red log below.';
         statusMsg.style.color = 'red';
-        logErrorToScreen("Failed to import pandoc-wasm module. This is usually caused by the browser blocking external WASM scripts on a non-HTTPS IP address.", err);
+        logErrorToScreen("Failed to import pandoc-wasm module.", err);
       }
     }
 
@@ -170,7 +167,7 @@
       convertBtn.disabled = true;
       statusMsg.textContent = 'Converting via Pandoc WASM...';
       statusMsg.style.color = '#555';
-      debugConsole.style.display = 'none'; // hide previous errors
+      debugConsole.style.display = 'none'; 
       
       try {
         const mdText = editor.value || "# Empty Document";
@@ -196,7 +193,6 @@
             throw new Error("Permission to save in folder denied.");
           }
         } else {
-          // Mobile Fallback
           const url = URL.createObjectURL(blob);
           const a = document.createElement('a');
           a.href = url;
